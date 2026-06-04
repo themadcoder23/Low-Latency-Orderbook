@@ -31,9 +31,15 @@ The OS heap is bypassed entirely. On system boot, a massive contiguous array (`O
 * **Deallocation:** `free_order(index)` pushes the empty index back to the top of the stack in $O(1)$ time. Zero data copying occurs.
 
 ### 3. The Active Network (The OrderBook)
-Price levels are tracked using a Direct Addressing Array (`BuyHead[MAX_PRICE_TICKS]` and `BuyTail[MAX_PRICE_TICKS]`). Each price level operates as an $O(1)$ Array-Backed Doubly-Linked FIFO Queue. 
+Price levels are tracked using a Direct Addressing Array (`BuyHead[MAX_PRICE_TICKS]` and `BuyTail[MAX_PRICE_TICKS]`, mirrored for the Sell side). Each price level operates as an $O(1)$ Array-Backed Doubly-Linked FIFO Queue. 
 * **Global Trackers:** Store only the absolute front (locomotive) and back (caboose) of the queue.
 * **Implicit Linking:** Middle orders are tracked entirely by the `next` and `prev` intrusive indices inside the memory pool.
+
+### 4. The Execution Engine (The Taker Sweep)
+When an aggressive order hits the exchange, it does not search. It executes a strict **Two-Tiered Sweep**:
+* **Tier 1 (Price Priority):** The outer loop walks the active price arrays (using `curr_best_ask` or `curr_best_bid`) bound by the incoming order's limit price. 
+* **Tier 2 (Time Priority):** The inner loop rips through the doubly-linked queue at the current best price, mathematically reducing quantities (Partial Fills) or severing dead nodes and returning them to the Free List (Full Fills). 
+* **Hardware Guards:** Explicit index capping prevents `SIGSEGV` segmentation faults when simulating infinite-price Market Orders.
 
 ---
 
@@ -45,9 +51,13 @@ All operations execute in strict **$O(1)$ Time Complexity** with zero memory shi
 * `allocate_order()` / `free_order()`: Custom bare-metal memory management engine.
 * `add_buy_order(price_tick, new_index)`: Appends an order to the Tail of a price queue while maintaining strict doubly-linked integrity.
 * `cancel_buy_order(price_tick, target_index)`: Safely extracts an order from the Head, Tail, or Middle of the queue and returns its memory to the Free List by bypassing its neighbors, avoiding $O(N)$ array shifting.
+* `match_buy_order(incoming_order, incoming_price)`: Aggressive sweep that crosses an incoming Buy against the passive Sell book, gracefully handling State 1/3 (Full Fills) and State 2 (Partial Fills) without leaking memory.
 
 ---
 
 ## 🚀 Next Steps (Roadmap)
-* **Execution Engine:** Implement `match_order()` to cross incoming aggressive orders against the resting passive book.
-* **Lock-Free Bridge:** Engineer a Single-Producer/Single-Consumer (SPSC) lock-free Ring Buffer to feed network packets into the single-threaded matching engine.
+* **The Inverted Sweep:** Implement `match_sell_order()` to cross aggressive Sellers against the passive Buy book.
+* **$O(1)$ ID Lookup:** Build a flat mapping array (`Order_id -> pool_index`) to allow instantaneous $O(1)$ cancellations directly from network requests.
+* **The Dispatch Router:** Implement `submit_order()` to dynamically route incoming packets to either execution sweeps or the passive resting queues.
+* **The Benchmark Crucible:** Run 10 million simulated orders through the core to measure sub-microsecond latency and L1 cache miss rates.
+* **Lock-Free Bridge:** Engineer a Single-Producer/Single-Consumer (SPSC) lock-free Ring Buffer using `<atomic>` to feed network packets into the single-threaded matching engine.
